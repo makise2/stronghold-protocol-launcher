@@ -54,7 +54,7 @@ static class Prog
 {
     const string AppName = "卫戍协议启动器";
     const string GameName = "卫戍协议：盟约";
-    const string Version = "1.2.3";   // ★ 用户 2026-10-04 决定：什么都没发布过，就用 1.2.3（v1.2.2/v1.2.4/v1.2.5 都不发）
+    const string Version = "1.2.5";   // ★ 跳号说明：1.2.4 是删库重建前用过的号，跳过它才能保证所有旧版本都能自动更新
     const string DefaultRoomName = "AAAlappland";
     const string DefaultRoomPass = "909090pq";
     const string PublicPeer = "tcp://public.easytier.cn:11010";
@@ -89,6 +89,7 @@ static class Prog
     static string cliDlgCheck;             // -dlgcheck:install|token|pack|splash|gamedl 测试钩子：自动自检某个对话框
     static string cliGameDlTest;           // -gamedltest:<zip或local:路径> 测试钩子：离线跑一遍下载(可断点)+解压剥壳+校验
     static bool cliTunnelSim;              // -tunnelsim 测试钩子：离线验"断线后自动重开游戏页面"这条链路
+    static bool cliKillStray;              // -killstray 工具钩子：整族清掉残留的 openp2p 引擎（端口被占时用）
     static string cliPackOut;              // -pack:<zip路径> / -packfull:<zip路径> 钩子：无人值守打包（发版用）
     static bool cliPackFull;               // 上面那个钩子：true = 带上便携版 Node（打"开房包"）
     static bool cliShake;                  // -uishake 测试钩子：把"交互后才出现"的布局逐个走一遍自检
@@ -967,6 +968,26 @@ static class Prog
         catch { }
     }
 
+    // ★ v1.2.5 修：整族清掉 openp2p（daemon + 它拉起的所有 worker）。
+    //   为什么不能只杀"占用 3000 的那个 PID"：openp2p 是 `-d` 守护模式，被杀的通常只是 worker，
+    //   daemon 一秒后又拉起一个 —— 实测 2026-10-04 20:38:39 杀掉 PID 10032 → 20:38:40 又 start worker process。
+    //   残留下来就是两族引擎抢 3000/3090（日志每 10 秒刷一次 `bind: Only one usage of each socket address`），
+    //   而且两边带**同一个 `-node` 名**登同一条网会互相顶掉 → 表现成"已连接→立刻断开"横跳、掉线后几分钟才回来。
+    //   返回清掉的数量（0 = 本来就没有残留）。
+    static int KillAllOpenP2P()
+    {
+        int n = 0;
+        try { n = Process.GetProcessesByName("openp2p").Length; } catch { }
+        if (n == 0) return 0;
+        RunHidden("taskkill", "/F /IM openp2p.exe", false);
+        Thread.Sleep(500);
+        int left = 0;
+        try { left = Process.GetProcessesByName("openp2p").Length; } catch { }
+        // 杀不掉要说清楚（受限权限下 taskkill 会静默失败）—— 别让日志写着"已清理"其实还在
+        if (left > 0) Log("⚠ 还有 " + left + " 个 openp2p 没结束（可能需要管理员权限）—— 请到任务管理器里手动结束");
+        return n - left;
+    }
+
     // winget 在不在（Win10 1809 之前 / LTSC / 精简版都没有）。找不到时 winget 安装必然秒失败，
     // 而 RunHidden 的 catch{} 会把异常吞掉 → 日志只剩"未成功"，用户和排查的人都看不出原因
     static bool WingetAvailable()
@@ -1491,6 +1512,10 @@ static class Prog
         try
         {
             if (!File.Exists(O2PExe())) { Log("找不到 openp2p 引擎：" + O2PExe()); return; }
+            // ★ v1.2.5：起新隧道前先整族清掉残留 —— 否则新一轮的 3000/3090 会和上一轮的孤儿抢，
+            //   同一个 -node 名重复登录还会互相顶掉（"已连接→立刻断开"横跳）。幂等：没有残留就什么都不做。
+            int stray = KillAllOpenP2P();
+            if (stray > 0) { Log("已清理 " + stray + " 个残留的 openp2p 进程（上一次没收干净）"); Thread.Sleep(500); }
             List<string> a = new List<string>();
             a.Add("-d");                                  // 守护模式：worker 挂了自动重启
             a.Add("-loglevel"); a.Add("1");
@@ -1877,6 +1902,15 @@ static class Prog
                     {
                         string name = "";
                         try { name = victim.ProcessName; } catch { }
+                        if (name.Equals("openp2p", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // ★ v1.2.5：openp2p 不能只杀这一个 —— 它是 -d 守护模式，杀掉 worker 之后
+                            //   daemon 会立刻再拉一个起来，残留的引擎会和下一轮抢 3000/3090。整族清。
+                            int k = KillAllOpenP2P();
+                            Log("已清理 " + k + " 个 openp2p 进程（守护模式会自己拉起 worker，必须整族杀）");
+                            did = true;
+                            continue;
+                        }
                         victim.Kill();
                         victim.WaitForExit(1500);
                         did = true;
@@ -1909,6 +1943,9 @@ static class Prog
         // ★ v1.2.3 修：以前「关闭房间」只关游戏服务，openp2p 隧道没人管 —— 进程留着、状态栏也一直显示「已连接」
         try { if (pO2P != null && !pO2P.HasExited) { KillTree(pO2P); Log("已结束隧道进程 openp2p"); } } catch { }
         pO2P = null;
+        // ★ v1.2.5：再按名字兜一遍 —— 守护模式可能已经补拉过新的 worker，光杀当初那个 PID 收不干净
+        int leftO2P = KillAllOpenP2P();
+        if (leftO2P > 0) Log("已清理 " + leftO2P + " 个残留 openp2p 进程");
         TunnelStop();
         pendingJoinOpen = false;
         pEt = null; pNode = null;
@@ -5098,6 +5135,7 @@ static class Prog
             else if (a.StartsWith("-dlgcheck:")) cliDlgCheck = a.Substring(10);
             else if (a.StartsWith("-gamedltest:")) cliGameDlTest = a.Substring(12);
             else if (a == "-tunnelsim") cliTunnelSim = true;
+            else if (a == "-killstray") cliKillStray = true;   // 端口被占/日志一直刷 bind 错误时手动清一次
             else if (a.StartsWith("-packfull:")) { cliPackOut = a.Substring(10); cliPackFull = true; }
             else if (a.StartsWith("-pack:")) cliPackOut = a.Substring(6);
             else if (a == "-uishake") cliShake = true;
@@ -5108,6 +5146,7 @@ static class Prog
         if (cliForceDpi > 0) dpiScale = cliForceDpi / 100f;   // 测试钩子：模拟别的电脑的缩放
         // -gamedltest：完全不走界面，跑完写报告就退出（离线验断点续传 / 解压剥壳 / 校验）
         if (cliGameDlTest != null) { GameDlTest(cliGameDlTest); return; }
+        if (cliKillStray) { int n = KillAllOpenP2P(); Log("已清理 " + n + " 个残留 openp2p 进程（-killstray）"); return; }
         if (cliTunnelSim) { TunnelSimTest(); return; }
         // -pack: / -packfull: 无人值守打包（AppDir 决定包里装什么：所以要在**部署目录**里跑，
         //   这样打出来的轻量包只有 exe + openp2p + app.ico，不会把源码和内部文档一起打进去）
