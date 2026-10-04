@@ -8,11 +8,11 @@
 // 说明：本启动器是第三方工具，游戏本体来自开源同人项目 sganggs/Stronghold-Protocol（GPL-3.0-or-later）；
 //       游戏素材（美术/音乐/音效/文本/数据）版权归上海鹰角网络 / Yostar，不在本程序与 GPL 范围内。
 // ═══════════════════════════════════════════════════════════════════════════════
-//  卫戍协议：盟约 · 联机启动器                                            v1.1
+//  卫戍协议：盟约 · 联机启动器                                            v1.2
 //  完整客户端外壳：启动画面 / 库主页（单机开始）/ 联机（组网+开房+房间面板）/ 设置（安装、自启、更新、打包、卸载）
 //  单文件 WinForms 程序，用 Windows 自带的 csc.exe 编译（见 build.bat），
 //  目标框架 .NET Framework 4.8 → 使用者零运行环境。
-//  详细经验见同目录 skill-winforms-cjk-dpi-gui.md（14 章，含本文件所有坑的来龙去脉）。
+//  界面适配要点：尺寸/字号统一由一个缩放系数换算（Sc/Lg），别混用两套单位；详见下面「交付前必查」。
 //
 //  ┌──────────────────────────────────────────────────────────────────────────┐
 //  │  ★ 交付前必查（每条都出过事，别跳过）                                      │
@@ -1912,7 +1912,7 @@ static class Prog
     // ★ 2026-10-04 实测纠正：不能靠 pO2P.OutputDataReceived！加了 -d 守护模式后父进程只打印
     //   "daemon run start / system service start / start worker process"，
     //   真正的 "login ok / sdwan init ok" 是 worker 进程写的，只落日志文件 ——
-    //   实测那 15 行隧道 stdout 里 "login ok" 命中 0 次（交接文档里"已确认可用"的说法是错的）。
+    //   实测那 15 行隧道 stdout 里 "login ok" 命中 0 次 —— 所以判据必须是日志文件，不能是 stdout。
     static readonly object tunnelLock = new object();
     static int tunnelState = 0;                  // 0=未连接 1=握手中 2=已连接 3=失败
     static DateTime tunnelStartedAt = DateTime.MinValue;
