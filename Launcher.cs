@@ -54,7 +54,7 @@ static class Prog
 {
     const string AppName = "卫戍协议启动器";
     const string GameName = "卫戍协议：盟约";
-    const string Version = "1.2.1";
+    const string Version = "1.2.3";   // ★ 用户 2026-10-04 决定：什么都没发布过，就用 1.2.3（v1.2.2/v1.2.4/v1.2.5 都不发）
     const string DefaultRoomName = "AAAlappland";
     const string DefaultRoomPass = "909090pq";
     const string PublicPeer = "tcp://public.easytier.cn:11010";
@@ -179,6 +179,7 @@ static class Prog
             ProcessStartInfo si = new ProcessStartInfo(EtCli(), "peer");
             si.UseShellExecute = false; si.CreateNoWindow = true;
             si.RedirectStandardOutput = true; si.RedirectStandardError = true;
+            si.StandardOutputEncoding = Encoding.UTF8; si.StandardErrorEncoding = Encoding.UTF8;   // 主机名可能是中文
             Process p = Process.Start(si);
             string o = p.StandardOutput.ReadToEnd();
             p.WaitForExit(2000);
@@ -562,8 +563,29 @@ static class Prog
     }
 
     // ================= 日志 =================
+    // ★ 令牌打码（2026-10-04 深夜修）：openp2p 会把自己完整的命令行原样打出来，里面带
+    //   `-token 一串数字` —— 我们照抄进日志，等于把令牌明文写进文件。而日志正是要发给粥友、
+    //   或贴到公开 Issue 里的东西。实测本机 logs\启动器.log 里躺着 17 行明文令牌。
+    //   所有落盘日志（Log / LogEt）都先过这一层，以后新增的输出自动被保护。
+    static string MaskTok(string s)
+    {
+        if (s == null) return s;
+        string r = s;
+        int i = r.IndexOf("-token", StringComparison.OrdinalIgnoreCase);
+        while (i >= 0)
+        {
+            int j = i + 6;
+            while (j < r.Length && (r[j] == ' ' || r[j] == '\t' || r[j] == '"')) j++;
+            int k = j;
+            while (k < r.Length && r[k] != ' ' && r[k] != '\t' && r[k] != '"' && r[k] != ']' && r[k] != ',') k++;
+            if (k > j) { r = r.Substring(0, j) + "****" + r.Substring(k); i = r.IndexOf("-token", j + 4, StringComparison.OrdinalIgnoreCase); }
+            else i = r.IndexOf("-token", j, StringComparison.OrdinalIgnoreCase);
+        }
+        return r;
+    }
     static void Log(string s)
     {
+        s = MaskTok(s);
         try { File.AppendAllText(TempLog, DateTime.Now.ToString("HH:mm:ss") + "  " + s + "\r\n", Encoding.UTF8); } catch { }
         try
         {
@@ -586,6 +608,7 @@ static class Prog
 
     static void LogEt(string s)
     {
+        s = MaskTok(s);
         try { File.AppendAllText(Path.Combine(LogDirRoot(), "组网.log"), DateTime.Now.ToString("HH:mm:ss") + "  " + s + "\r\n", Encoding.UTF8); } catch { }
     }
 
@@ -1488,6 +1511,9 @@ static class Prog
             si.WorkingDirectory = AppDir;   // 日志写在启动器目录下的 log\
             si.UseShellExecute = false; si.CreateNoWindow = true;
             si.RedirectStandardOutput = true; si.RedirectStandardError = true;
+            // ★ 2026-10-04 修：openp2p 是 Go 程序、输出 UTF-8，而 .NET 的 RedirectStandardOutput
+            //   默认按系统 ANSI(GBK) 解码 → 日志里的中文路径全成 `D:\鍗垗鍗忚\...` 这种乱码。
+            si.StandardOutputEncoding = Encoding.UTF8; si.StandardErrorEncoding = Encoding.UTF8;
             pO2P = Process.Start(si);
             pO2P.OutputDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null && e.Data.Trim().Length > 0) { Log("[隧道] " + e.Data.Trim()); LogEt(e.Data.Trim()); } };
             pO2P.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null && e.Data.Trim().Length > 0) { Log("[隧道] " + e.Data.Trim()); LogEt(e.Data.Trim()); } };
@@ -1507,6 +1533,7 @@ static class Prog
             si.WorkingDirectory = EtHome();
             si.UseShellExecute = false; si.CreateNoWindow = true;
             si.RedirectStandardOutput = true; si.RedirectStandardError = true;
+            si.StandardOutputEncoding = Encoding.UTF8; si.StandardErrorEncoding = Encoding.UTF8;   // EasyTier 是 Rust 程序，输出 UTF-8
             pEt = Process.Start(si);
             pEt.OutputDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null && e.Data.Trim().Length > 0) { Log("[组网] " + e.Data.Trim()); LogEt(e.Data.Trim()); } };
             pEt.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null && e.Data.Trim().Length > 0) { Log("[组网] " + e.Data.Trim()); LogEt(e.Data.Trim()); } };
@@ -1527,6 +1554,8 @@ static class Prog
             si.WorkingDirectory = g;
             si.UseShellExecute = false; si.CreateNoWindow = true;
             si.RedirectStandardOutput = true; si.RedirectStandardError = true;
+            // ★ 同上：node 的输出也是 UTF-8，不设这个 logs\游戏服务.log 就是乱码
+            si.StandardOutputEncoding = Encoding.UTF8; si.StandardErrorEncoding = Encoding.UTF8;
             pNode = Process.Start(si);
             try
             {
@@ -1591,8 +1620,11 @@ static class Prog
                 FlashStatus(h ? "● 房间已开好，邀请已复制" : "● 已加入，隧道连上就自动开游戏页", C_MINT);
                 if (h) { try { Process.Start("http://localhost:3000"); } catch { } }
             });
-            CopyText(InviteText());   // 必须复制整段邀请：裸链接不带 peer=，粥友那边隧道建不起来
-            Log("邀请已复制（含房主节点名 " + MyO2PNode() + "）");
+            if (h)   // ★ 2026-10-05 修：只有房主才该复制邀请 —— 加入方复制出来的是"指向他自己"的假邀请
+            {
+                CopyText(InviteText());   // 必须复制整段邀请：裸链接不带 peer=，粥友那边隧道建不起来
+                Log("邀请已复制（含房主节点名 " + MyO2PNode() + "）");
+            }
           }
           catch (Exception ex)
           {
@@ -1945,16 +1977,20 @@ static class Prog
         int old;
         lock (tunnelLock) { old = tunnelState; tunnelState = st; if (reason != null) tunnelFail = reason; }
         if (old == st) return;
-        if (st == 0) { pendingJoinOpen = false; rejoinPending = false; }   // ★ 只在"收摊"时清；失败时不清（openp2p 会自愈，连上后还要自动开页面）
+        if (st == 0) { pendingJoinOpen = false; rejoinPending = false; nextPortProbeAt = DateTime.MinValue; lastPortOpen = true; portEverUp = false; dropSince = DateTime.MinValue; watchdogOffered = false; }   // ★ 只在"收摊"时清；失败时不清（openp2p 会自愈，连上后还要自动开页面）
         if (st == 2)
         {
-            Log("[隧道状态] 已连接（" + (tunnelHost ? "房主已在线" : "已连上房主") + "，握手用了 " + (int)(DateTime.Now - tunnelStartedAt).TotalSeconds + " 秒）");
+            portEverUp = false; lastPortOpen = true;   // 新一次连接：通道"还没就绪"属正常，别当故障报警
+            dropSince = DateTime.MinValue; watchdogOffered = false;
+            Log("[隧道状态] 已连接（" + (tunnelHost ? "房主已在线" : "已连上房主") + "，启动后 " + (int)(DateTime.Now - tunnelStartedAt).TotalSeconds + " 秒连上）");
             if (pendingJoinOpen) Ui(delegate { JoinOpenGame(); });   // 粥友：隧道真连上了才开浏览器
             else if (rejoinPending) { if (tunnelSim) ReopenAfterDrop(); else Ui(delegate { ReopenAfterDrop(); }); }
         }
         else if (st == 4)
         {
-            Log("[隧道状态] 隧道断开：" + tunnelFail + "（openp2p 会自己重连）");
+            dropSince = DateTime.Now;   // 看门狗从这里开始算：断开多久了
+            Log(tunnelHost ? "[隧道状态] 对方断开了（你自己还在线，openp2p 会等对方重连）"
+                           : "[隧道状态] 隧道断开：" + tunnelFail + "（openp2p 会自己重连）");
             // ★ 断线自动恢复（v1.2 起）：只给**加入方**记待办 —— 房主那个页面是本机 127.0.0.1，
             //   跟隧道没关系；而且只在"他这次进房已经进过游戏"之后才自动重开，
             //   免得粥友刚进房就被多开一个标签页。
@@ -2029,6 +2065,61 @@ static class Prog
         lock (tunnelLock) { st = tunnelState; }
         if (st == 1 && (DateTime.Now - tunnelStartedAt).TotalSeconds >= 75)
             TunnelSet(3, tunnelFail.Length > 0 ? tunnelFail : "等了 75 秒还没登录成功");
+
+        // ★ 客户端"页面通道"探针（2026-10-04 深夜加）：隧道状态是读 openp2p 日志判出来的，
+        //   "浏览器那边还通不通"只有真连一次才知道。双机实测里粥友 19:06 说"中间闪退了一次"，
+        //   而房主侧隧道那会儿并没有断 —— 这种故障以前在日志里一点痕迹都不留。
+        //   现在进房后每 10 秒探一次 127.0.0.1:3000，状态一变就写一行，下次双机就能定死它。
+        if (st == 2 && !tunnelHost && DateTime.Now >= nextPortProbeAt)
+        {
+            nextPortProbeAt = DateTime.Now.AddSeconds(10);
+            bool up = false;
+            try
+            {
+                using (System.Net.Sockets.TcpClient c = new System.Net.Sockets.TcpClient())
+                {
+                    IAsyncResult ar = c.BeginConnect("127.0.0.1", 3000, null, null);
+                    up = ar.AsyncWaitHandle.WaitOne(400) && c.Connected;
+                }
+            }
+            catch { }
+            if (up != lastPortOpen)
+            {
+                lastPortOpen = up;
+                bool first = !portEverUp && !joinOpenedOnce;   // 隧道刚连上、页面还没开过 = 正常窗口，不是故障
+                if (up) portEverUp = true;
+                Log("[页面通道] " + (up ? "恢复可用（127.0.0.1:3000 能连上）"
+                                        : (first ? "还没就绪（隧道刚连上，本机 3000 还没开始转发 —— 正常，稍等几秒）"
+                                                 : "不可用：隧道看着还好，但本机 3000 连不上 —— 浏览器里会是拒绝连接/白屏")));
+                bool upNow = up; bool firstNow = first;
+                Ui(delegate
+                {
+                    FlashStatusFor(upNow ? "● 页面通道已恢复（浏览器若还是白屏就刷新一下）"
+                                         : (firstNow ? "◌ 页面通道还没就绪，稍等几秒…" : "◌ 页面通道断了，正在自动重连…"),
+                                   upNow ? C_MINT : Color.FromArgb(240, 170, 90), 8);
+                });
+            }
+        }
+
+        // ★ 看门狗（方案 A，2026-10-05）：断开卡住 90 秒还没回来，就把状态栏那行变成可点的「重启组网」。
+        //   实测依据：20:07:43 掉线 → 20:12:50 openp2p 的 worker 自己崩掉重启 → 20:13:07 才连上，
+        //   中间 5 分 24 秒全是干等。**只提示、不自动重启** —— 自动重启会在"它下一秒钟本来就要连上"时
+        //   白打断一次，把这个判断权交给用户更划算。
+        if (!tunnelHost && st == 4 && dropSince != DateTime.MinValue)
+        {
+            bool offer = WatchdogShouldOffer(st, tunnelHost, dropSince, DateTime.Now);
+            if (offer != watchdogOffered)
+            {
+                watchdogOffered = offer;
+                if (offer) Log("[看门狗] 断开已 " + (int)(DateTime.Now - dropSince).TotalSeconds + " 秒还没回来 —— 状态栏给了「点这行重启组网」");
+                Ui(delegate { if (statusLine != null) statusLine.Cursor = offer ? Cursors.Hand : Cursors.Default; });
+            }
+        }
+        else if (watchdogOffered)
+        {
+            watchdogOffered = false;
+            Ui(delegate { if (statusLine != null) statusLine.Cursor = Cursors.Default; });
+        }
     }
 
     // openp2p 日志的一行 → 状态
@@ -2075,7 +2166,13 @@ static class Prog
             return "◌ 隧道握手中…（已等 " + (sec / 5 * 5) + " 秒，一般 5–20 秒）";
         }
         if (st == 2) return host ? "● 隧道已连接（房主已在线）" : "● 隧道已连接（已连上房主）";
-        if (st == 4) return "◌ 隧道断开，正在自动重连…（连上后会自动帮你重开游戏页面）";
+        if (st == 4)
+        {
+            int ds = dropSince == DateTime.MinValue ? 0 : (int)(DateTime.Now - dropSince).TotalSeconds;
+            if (host) return "○ 还没有粥友连着（你自己在线，等对方重连）";
+            if (watchdogOffered) return "▶ 重连卡住了（已等 " + ds / 5 * 5 + " 秒）—— 点这行重启组网";
+            return "◌ 隧道断开，正在自动重连…（已等 " + ds / 5 * 5 + " 秒，连上后会自动重开游戏页面）";
+        }
         if (st == 3) return "✗ 隧道没连上：" + Shorten(why, 16) + "（看 logs\\组网.log）";
         return "○ 隧道未连接（还没开房/还没进房）";
     }
@@ -2086,6 +2183,11 @@ static class Prog
     static bool pendingJoinOpen;
     static bool joinTipShown;
     static bool joinOpenedOnce;                     // 这次进房以后，游戏页面至少打开过一次
+    static DateTime nextPortProbeAt = DateTime.MinValue;   // 客户端"页面通道"探针的下次探测时间
+    static bool lastPortOpen = true;                       // 上次探测结果（只在变化时写日志，免得刷屏）
+    static bool portEverUp;                                // 这次连接里通道是否曾经通过（没通过前不报警：那是隧道刚连上的正常窗口）
+    static DateTime dropSince = DateTime.MinValue;          // 进入"断开重连中"的时刻（看门狗用它算等了多久）
+    static bool watchdogOffered;                            // 状态栏是否已经变成可点的「重启组网」
     static bool rejoinPending;                      // 断线了，等重连上再自动重开一次页面
     static DateTime lastReopenAt = DateTime.MinValue;
     static bool tunnelSim;                          // -tunnelsim 自检：只记数，不真开浏览器
@@ -2120,9 +2222,51 @@ static class Prog
             if (simRep != null) simRep.AppendLine("　[自检] 这里会重新打开游戏页面（第 " + simReopenCount + " 次）");
             return;
         }
-        try { Process.Start(RoomUrl(true)); } catch { }
-        Log("隧道重连成功，已自动重新打开游戏页面：" + RoomUrl(true));
-        FlashStatusFor("● 隧道重连成功，游戏页面已重新打开", C_MINT, 8);
+        // ★ 2026-10-05 修（实测 20:13:07 抓到的）：隧道报"已连接"那一刻本机 3000 还没开始转发，
+        //   直接开就又得到一张"拒绝连接"。跟首次进房一样，先真连一次本机端口再开。
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            bool ok = WaitPortOpen(3000, 25);
+            Ui(delegate
+            {
+                try { Process.Start(BrowserUrl()); } catch { }
+                Log("隧道重连成功，已自动重新打开游戏页面：" + BrowserUrl() + (ok ? "" : "（⚠ 打开时本机 3000 仍未就绪）"));
+                FlashStatusFor("● 隧道重连成功，游戏页面已重新打开", C_MINT, 8);
+            });
+        });
+    }
+
+    // ===== 看门狗（方案 A，2026-10-05）=====
+    // 背景：实测（2026-10-04 20:07–20:13）客户端掉线后**空等了 5 分 24 秒** —— 真正让它回来的不是
+    // "重连成功"，是 openp2p 自己的 worker 崩掉、daemon 把它重启。既然"重启"才是解药，就别让人无限干等：
+    // 断开超过 90 秒，状态栏那行变成可点的「▶ 重连卡住了 —— 点这行重启组网」。
+    // ★ 只给**加入方**提供：房主把自己引擎重启会把正在连的粥友踢下线，而且房主侧"断开"多半只是对方走了。
+    // 看门狗判定（纯函数，可离线自检）：只有"加入方 + 状态4 + 断开已满 90 秒"才提示重启
+    static bool WatchdogShouldOffer(int st, bool host, DateTime since, DateTime now)
+    {
+        return !host && st == 4 && since != DateTime.MinValue && (now - since).TotalSeconds >= 90;
+    }
+
+    static void WatchdogRestart()
+    {
+        if (!watchdogOffered) return;     // 没到那一步点了也没事（防误点把好好的连接重启掉）
+        Log("[看门狗] 用户点了状态栏 → 重启组网引擎");
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            try
+            {
+                Ui(delegate { FlashStatus("◌ 正在重启组网引擎…", Color.FromArgb(240, 200, 120)); });
+                // 必须整族清掉：只杀父 daemon 的话 worker 还活着、还占着本机 3000，新的会起不来
+                RunHidden("taskkill", "/F /IM openp2p.exe", false);
+                Thread.Sleep(800);
+                watchdogOffered = false;
+                Ui(delegate { if (statusLine != null) statusLine.Cursor = Cursors.Default; });
+                TunnelBegin(tunnelHost);
+                StartO2P(tunnelHost, tunnelHost ? null : joinPeerNode);
+                Log("[看门狗] 组网引擎已重启，等它重新握手（一般 5–20 秒）");
+            }
+            catch (Exception ex) { Log("[看门狗] 重启组网失败：" + ex.Message); }
+        });
     }
 
     // -tunnelsim：离线验"断线自动恢复"这条链路（不开浏览器、不碰网络、不弹框）
@@ -2164,17 +2308,66 @@ static class Prog
         sb.AppendLine("⑥ 断线途中点了「关闭房间」→ 待办残留=" + residue + "（期望 False）");
 
         bool pass = (a == 0 && b == 1 && c == 0 && d == 1 && e == 0 && !residue);
+
+        // ⑦ 看门狗（方案 A）：断开卡住 90 秒才把状态栏变成可点的「重启组网」
+        DateTime wt = DateTime.Now;
+        bool w1 = WatchdogShouldOffer(4, false, wt, wt.AddSeconds(89));    // 还没到 → False
+        bool w2 = WatchdogShouldOffer(4, false, wt, wt.AddSeconds(91));    // 到了 → True
+        bool w3 = WatchdogShouldOffer(4, true, wt, wt.AddSeconds(600));    // 房主 → False（重启会把粥友踢下线）
+        bool w4 = WatchdogShouldOffer(2, false, wt, wt.AddSeconds(600));   // 已经连上 → False
+        sb.AppendLine("⑦ 看门狗：89秒=" + w1 + " 91秒=" + w2 + " 房主=" + w3 + " 已连接=" + w4 + "（期望 False/True/False/False）");
+        pass = pass && !w1 && w2 && !w3 && !w4;
+
         sb.AppendLine("总判定=" + (pass ? "PASS" : "FAIL"));
         try { File.AppendAllText(Path.Combine(LogDirRoot(), "断线恢复检查.txt"), sb.ToString() + "\r\n", Encoding.UTF8); } catch { }
+    }
+
+    // ★ 2026-10-04 深夜修：隧道"已连接"是**读 openp2p 日志**判出来的（TunnelFeed），那一刻
+    //   本机 3000 未必已经开始转发 —— 双机实测里粥友看到的就是"一打开浏览器就 127.0.0.1
+    //   拒绝连接，过一会儿/刷新一下又好了"。所以开页面前真连一次本机端口，不通就每秒重试；
+    //   实在不通也照样打开（绝不比原来更差，只是状态栏会提示要刷新）。
+    static bool WaitPortOpen(int port, int seconds)
+    {
+        DateTime t0 = DateTime.Now;
+        while (true)
+        {
+            try
+            {
+                using (System.Net.Sockets.TcpClient c = new System.Net.Sockets.TcpClient())
+                {
+                    IAsyncResult ar = c.BeginConnect("127.0.0.1", port, null, null);
+                    if (ar.AsyncWaitHandle.WaitOne(500) && c.Connected) return true;
+                }
+            }
+            catch { }
+            if ((DateTime.Now - t0).TotalSeconds >= seconds) return false;
+            Thread.Sleep(600);
+        }
     }
 
     static void JoinOpenGame()
     {
         pendingJoinOpen = false;
         joinOpenedOnce = true;
-        try { Process.Start(RoomUrl(true)); } catch { }
-        Log("已打开游戏页面：" + RoomUrl(true));
-        FlashStatusFor("● 隧道已连上，游戏页面已打开", C_MINT, 8);
+        FlashStatusFor("● 隧道已连上，正在确认游戏页面通道…", C_MINT, 6);
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            bool ok = WaitPortOpen(3000, 25);          // 这就是"隧道通了、本机还没开始转发"的那几秒
+            if (ok) Log("本机 3000 已就绪，打开游戏页面");
+            else Log("等了 25 秒本机 3000 还没就绪，仍然打开页面（浏览器里可能要先刷新一次）");
+            Ui(delegate
+            {
+                try { Process.Start(BrowserUrl()); } catch { }
+                Log("已打开游戏页面：" + BrowserUrl());
+                FlashStatusFor(ok ? "● 隧道已连上，游戏页面已打开" : "◌ 页面已打开，若显示拒绝连接就刷新一次",
+                               ok ? C_MINT : Color.FromArgb(240, 170, 90), 10);
+                JoinTipOnce();
+            });
+        });
+    }
+
+    static void JoinTipOnce()
+    {
         if (joinTipShown) return;
         joinTipShown = true;
         MessageBox.Show(
@@ -2277,6 +2470,7 @@ static class Prog
                 ProcessStartInfo si = new ProcessStartInfo(EtCli(), "peer");
                 si.UseShellExecute = false; si.CreateNoWindow = true;
                 si.RedirectStandardOutput = true; si.RedirectStandardError = true;
+                si.StandardOutputEncoding = Encoding.UTF8; si.StandardErrorEncoding = Encoding.UTF8;   // 主机名可能是中文
                 Process p = Process.Start(si);
                 string o = p.StandardOutput.ReadToEnd();
                 p.WaitForExit(2000);
@@ -2312,6 +2506,16 @@ static class Prog
     static string RoomUrl(bool withQuery)
     {
         return HostLink() + "/" + (withQuery ? RoomQuery() : "");   // openp2p：粥友那边始终是本机 3000，不是 EasyTier 虚拟 IP
+    }
+
+    // ★ 2026-10-04 深夜：**浏览器**打开的地址只带房间名/密码。
+    //   以前这里直接塞整串 RoomQuery()，把 peer= 和 o2p=<联机令牌> 一路带进了地址栏 ——
+    //   浏览器根本不需要它们（只有"粘进启动器"的邀请文本才需要），结果令牌留在了
+    //   粥友的浏览器历史和聊天截图里（实测截图地址栏里就有明文令牌）。
+    static string BrowserUrl()
+    {
+        string rn = Convert.ToBase64String(Encoding.UTF8.GetBytes(seats[0]));
+        return HostLink() + "/?rn=" + Uri.EscapeDataString(rn) + "&pw=" + Uri.EscapeDataString(seats[1]);
     }
 
     // 整段邀请内容：链接 + 密钥说明 + 玩法提示，整个粘到群里即可
@@ -4988,6 +5192,8 @@ static class Prog
         statusLine.TextAlign = ContentAlignment.MiddleRight;
         statusLine.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         top.Controls.Add(statusLine);
+        // ★ 看门狗（方案 A，2026-10-05）：断开卡住 90 秒后，这一行会变成可点的「重启组网」
+        statusLine.Click += delegate { WatchdogRestart(); };
 
         // 左侧导航
         sidePanel = new Panel();
