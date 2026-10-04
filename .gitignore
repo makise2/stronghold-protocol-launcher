@@ -1,0 +1,35 @@
+# 编译产物与本地文件
+*.exe
+*.pdb
+*.dll
+
+# 游戏本体 / 素材（版权归鹰角，绝对不要传）
+Stronghold-Protocol/
+assets/
+public/assets/
+*.zip
+*.7z
+
+# 第三方二进制（组网引擎）
+easytier/
+easytier-windows-x86_64/
+openp2p/
+
+# 运行期产生的文件
+logs/
+dist/
+启动器配置.txt
+布局诊断.txt
+_uninstall.cmd
+.fw
+
+# 验证用临时文件
+*.png
+shot-*.png
+*.mjs
+button-width.txt
+
+# 系统
+Thumbs.db
+desktop.ini
+.vs/
