@@ -54,7 +54,7 @@ static class Prog
 {
     const string AppName = "卫戍协议启动器";
     const string GameName = "卫戍协议：盟约";
-    const string Version = "1.2";
+    const string Version = "1.2.1";
     const string DefaultRoomName = "AAAlappland";
     const string DefaultRoomPass = "909090pq";
     const string PublicPeer = "tcp://public.easytier.cn:11010";
@@ -90,7 +90,7 @@ static class Prog
     static string cliGameDlTest;           // -gamedltest:<zip或local:路径> 测试钩子：离线跑一遍下载(可断点)+解压剥壳+校验
     static bool cliTunnelSim;              // -tunnelsim 测试钩子：离线验"断线后自动重开游戏页面"这条链路
     static string cliPackOut;              // -pack:<zip路径> / -packfull:<zip路径> 钩子：无人值守打包（发版用）
-    static bool cliPackFull;               // 上面那个钩子：true = 连游戏本体一起打
+    static bool cliPackFull;               // 上面那个钩子：true = 带上便携版 Node（打"开房包"）
     static bool cliShake;                  // -uishake 测试钩子：把"交互后才出现"的布局逐个走一遍自检
     static string lcSuffix = "";           // 非空 = 震荡模式：报告名加后缀、检查完不退出
     static string lcStep = "";             // 当前震荡步骤名
@@ -849,7 +849,7 @@ static class Prog
     }
     static bool HasPortableNode() { return NodeExe() != "node"; }
 
-    // 找一份可复制的 node.exe：优先包里自带的，其次系统安装的（完整包会把它塞进去，粥友就不用装 Node 了）
+    // 找一份可复制的 node.exe：优先包里自带的，其次系统安装的（"开房包"会把它塞进去，粥友就不用装 Node 了）
     static string FindSystemNode()
     {
         try
@@ -1183,7 +1183,7 @@ static class Prog
                     Directory.CreateDirectory(Path.Combine(target, "openp2p"));
                     File.Copy(o2pSrc, Path.Combine(target, "openp2p\\openp2p.exe"), true);   // 只带引擎，不带 config.json 与日志，避免节点名撞车
                 }
-                // ★ 完整包自带的便携版 Node 必须一起搬走（2026-10-04 台式机实测踩的坑）：
+                // ★ 包里自带的便携版 Node 必须一起搬走（2026-10-04 台式机实测踩的坑）：
                 //   以前只搬 exe + openp2p，装完 AppDir 里没有 node\ → 开房时又报"没检测到 Node.js"，
                 //   而 winget 在很多机器上根本没有 → 自动安装秒失败，用户看到的就是"装了启动器却开不了房"。
                 foreach (string relN in new string[] { "node\\node.exe", "nodejs\\node.exe", "node.exe" })
@@ -1648,8 +1648,8 @@ static class Prog
         if (!WingetAvailable())
         {
             ClearBanner();
-            Log("⚠ 这台电脑没有 winget（自动安装做不了）——请用带 node 的完整包，或手动装 Node.js");
-            MessageBox.Show("这台电脑没有 winget，自动安装做不了。\n\n两条路任选：\n· 用「完整包」（里面自带 Node.js，解压就带，不用装）\n· 或手动装：https://nodejs.org/zh-cn/download\n装完重开启动器即可。", "提示");
+            Log("⚠ 这台电脑没有 winget（自动安装做不了）——请用带 node 的「开房包」，或手动装 Node.js");
+            MessageBox.Show("这台电脑没有 winget，自动安装做不了。\n\n两条路任选：\n· 用「开房包」（里面自带 Node.js，解压就带，不用装）\n· 或手动装：https://nodejs.org/zh-cn/download\n装完重开启动器即可。", "提示");
             return false;
         }
         // 显示 winget 自己的进度窗口：让用户看到下载/安装在进行，不会以为卡死
@@ -3206,28 +3206,22 @@ static class Prog
     // 打包分享：先选打包内容（尺寸按文字实际宽度计算，避免内容撑破边框）
     static void PackDialog()
     {
-        string g = FindGame(true);
-        long gameBytes = 0;
-        try
-        {
-            if (g != null)
-                foreach (string fp in Directory.GetFiles(g, "*", SearchOption.AllDirectories))
-                    gameBytes += new FileInfo(fp).Length;      // 先累加字节，最后再换算（否则小文件会被整除成 0）
-        }
-        catch { }
-        long gameMb = gameBytes / (1024 * 1024);               // 未压缩体积
-        long zipMb = (long)(gameMb * 0.72) + 40;               // 压缩后估算（含启动器与引擎）
-
+        // ★ v1.2.1 起：两种包都**不再含游戏本体**（版权上彻底干净）。
+        //   "开房包"比轻量包多的只是便携版 node.exe —— 给想自己开房/单机的朋友；
+        //   游戏本体一律由他自己在启动器里点「下载游戏本体…」从原作者官方地址取（实测十几秒）。
         string nodeSrc = FindSystemNode();
-        bool canNode = (g != null && nodeSrc != null);
+        bool canNode = (nodeSrc != null);
+        long nodeMb = 0;
+        try { if (canNode) nodeMb = new FileInfo(nodeSrc).Length / (1024 * 1024); } catch { }
+        long pkgMb = canNode ? ((long)(nodeMb * 0.37) + 4) : 0;   // 实测：89MB 的 node.exe → 开房包 36.8MB
         string t1 = "要把什么打包给粥友？";
-        string s1 = "● 轻量包（推荐）：只有启动器 + 组网引擎，3.5 MB —— 朋友用启动器里的「下载游戏本体…」自己下。";
-        string s2 = "● 完整包（高级）：连游戏本体一起打包 —— 素材版权归鹰角，只能私下发给熟人。";
+        string s1 = "● 轻量包（推荐）：只有启动器 + 组网引擎，约 3.5 MB —— 给只想加入别人房间的人。";
+        string s2 = "● 开房包：再加一份便携版 Node.js —— 给想自己开房 / 玩单机的朋友。";
         string b1t = "轻量包（只有启动器 + 组网引擎，约 3.5 MB）";
-        string b2t = g != null ? ("完整包（游戏本体 + 启动器" + (canNode ? " + Node.js" : "") + "，约 " + zipMb + " MB）") : "完整包（本机没找到游戏本体）";
-        string h1 = "提示：轻量包不含任何游戏素材，可以放心发；朋友那边缺游戏本体时，启动器会带他从原作者官方地址下载（实测十几秒）。";
-        string h2 = "⚠ 完整包严禁公开上传 / 网盘转载：游戏素材版权归鹰角网络（Yostar），仅限私下非商业游玩分享。\n" +
-                    "　　　" + (canNode ? "本机会把 Node.js 一起打进去：" + nodeSrc : "本机没找到 Node.js，完整包里不会带（朋友第一次开房时会提示他装）");
+        string b2t = canNode ? ("开房包（启动器 + 引擎 + 便携版 Node.js，约 " + pkgMb + " MB）") : "开房包（本机没找到 Node.js，装一个再打）";
+        string h1 = "两种包都不含任何游戏素材，可以放心发；朋友那边缺游戏本体时，启动器会带他从原作者官方地址下载（实测十几秒）。";
+        string h2 = "提示：开房包解压即可开房，朋友不用自己装 Node.js。" +
+                    (canNode ? "" : "（本机没找到 Node.js，所以开房包暂时点不了）");
 
         Font ft = FTitle(14f, FontStyle.Bold);
         Font fs = Fui(9f);
@@ -3273,7 +3267,7 @@ static class Prog
 
             Button b2 = B(d, b2t, 28, y, contentW, 46, C_OFF, null);
             b2.Font = fb;
-            if (g == null) b2.Enabled = false;      // 完整包：本机没有游戏本体就点不了（高级选项）
+            if (!canNode) b2.Enabled = false;       // 开房包：本机没有 Node.js 就打不了
             y += 58;
 
             Label lh = new Label();
@@ -3292,10 +3286,9 @@ static class Prog
         }
     }
 
-    // 真正执行打包：withGame 决定是否连游戏本体一起压缩
-    static void PackFlow(bool withGame)
+    // 真正执行打包：withNode 决定是否带上便携版 Node.js（= "开房包"）。★ 两种包都**不含游戏本体**。
+    static void PackFlow(bool withNode)
     {
-        string g = FindGame(true);
         string zipPath;
         if (cliPackOut != null) zipPath = cliPackOut;      // -pack: 测试/发版钩子：不弹保存框，无人值守打包
         else
@@ -3303,13 +3296,12 @@ static class Prog
             SaveFileDialog sf = new SaveFileDialog();
             sf.Title = "保存分发包";
             sf.Filter = "压缩包 (*.zip)|*.zip";
-            sf.FileName = withGame ? "卫戍协议-完整包.zip" : "卫戍协议-轻量包.zip";
+            sf.FileName = withNode ? "卫戍协议-开房包.zip" : "卫戍协议-轻量包.zip";
             try { sf.InitialDirectory = Path.GetDirectoryName(AppDir); } catch { }
             if (sf.ShowDialog() != DialogResult.OK) return;
             zipPath = sf.FileName;
         }
-        string gameDir = (withGame ? g : null);
-        Log("开始打包" + (withGame ? "（含游戏本体）" : "（仅启动器）") + "…");
+        Log("开始打包" + (withNode ? "（含便携版 Node）" : "（仅启动器）") + "…");
         if (cliPackOut == null) StatusBusy("正在打包，请稍候…");
         Action body = delegate
         {
@@ -3321,29 +3313,30 @@ static class Prog
                 {
                     // 必须排除：启动器配置.txt 里有本机 o2p 节点名，带给粥友会撞名把房主顶下线；openp2p 的 config.json 同理
                     AddDir(zip, AppDir, "卫戍协议启动器", new string[] { "logs", "dist", "_uninstall.cmd", "启动器配置.txt", "openp2p\\config.json", "openp2p\\log", "easytier" });
-                    if (gameDir != null) AddDir(zip, gameDir, GameFolderName, new string[] { ".git" });
-                    // 完整包顺带塞一份便携版 node.exe：粥友解压就能开房，不用自己装 Node（启动器会优先用它）
-                    if (gameDir != null)
+                    // ★ v1.2.1 起**不再把游戏本体打进包里**（版权上彻底干净，作者那边也没得挑）：
+                    //   游戏由朋友自己在启动器里点「下载游戏本体…」从原作者官方地址取（实测十几秒）。
+                    //   开房包只多一份便携版 node.exe —— 解压就能开房，不用自己装 Node（启动器会优先用它）
+                    if (withNode)
                     {
                         string nodeSrc = FindSystemNode();
                         if (nodeSrc != null)
                         {
                             zip.CreateEntryFromFile(nodeSrc, "卫戍协议启动器/node/node.exe", CompressionLevel.Optimal);
-                            Log("已把 Node.js 打进完整包：" + nodeSrc);
+                            Log("已把 Node.js 打进开房包：" + nodeSrc);
                         }
-                        else Log("本机没找到 node.exe，完整包不带 Node（粥友开房时会被引导安装）");
+                        else Log("本机没找到 node.exe，开房包不带 Node（朋友开房时会被引导安装）");
                     }
                     // 打包根目录放两个"粥友入口"文件，避免对方解压后找不到该点哪个
                     AddTextEntry(zip, "① 双击这里开始.bat", StarterBat());
-                    AddTextEntry(zip, "② 使用说明-先看这个.txt", ReadmeTxt(withGame));
+                    AddTextEntry(zip, "② 使用说明-先看这个.txt", ReadmeTxt(withNode));
                     // ★ ③④ 是"换台电脑验证界面"用的（Win7 那台就靠它）。2026-10-05 发现这两个
                     //   只存在于当时手工打的包里、源码里没有 —— 结果用源码正式打包会把它俩弄丢，
                     //   而设置页还写着"双击解压目录里的 ④ 一键自检.bat"。现在补进源码，别再丢。
                     AddTextEntry(zip, "③ 界面自测.txt", SelfTestTxt());
                     AddTextEntry(zip, "④ 一键自检.bat", SelfTestBat());
-                    // 许可文件：分发了 openp2p 的二进制，MIT 要求随附版权声明与许可全文；完整包再补一份版权说明
+                    // 许可文件：分发了 openp2p 的二进制，MIT 要求随附版权声明与许可全文；两种包都再补一份版权说明
                     AddTextEntry(zip, "第三方许可-openp2p-MIT.txt", OpenP2pLicenseTxt());
-                    AddTextEntry(zip, "版权与来源-必读.txt", NoticeTxt(withGame));
+                    AddTextEntry(zip, "版权与来源-必读.txt", NoticeTxt(withNode));
                 }
                 long mb = new FileInfo(zipPath).Length / (1024 * 1024);
                 Log("打包完成：" + zipPath + "（" + mb + " MB）");
@@ -3462,30 +3455,27 @@ static class Prog
     }
 
     // 本包的版权与来源说明：谁能传、谁不能传、素材归谁，写在包里省得朋友再问
-    static string NoticeTxt(bool withGame)
+    static string NoticeTxt(bool withNode)
     {
         return
 "卫戍协议启动器　版权与来源说明\r\n" +
 "============================================================\r\n" +
 "生成时间：" + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "　启动器 v" + Version + "\r\n" +
-"包类型：" + (withGame ? "完整包（含游戏本体）—— 只限朋友之间私下非商业分享，不要公开上传" : "轻量包（只有启动器 + 组网引擎）") + "\r\n" +
+"包类型：" + (withNode ? "开房包（启动器 + 组网引擎 + 便携版 Node.js）" : "轻量包（只有启动器 + 组网引擎）") + "\r\n" +
 "\r\n" +
 "【这个包里有什么 / 分别归谁】\r\n" +
 "· 卫戍协议启动器、openp2p 组网引擎：启动器是本项目自制（GPL-3.0-or-later）；\r\n" +
 "  openp2p 来自 github.com/openp2p-cn/openp2p（MIT），全文见同目录『第三方许可-openp2p-MIT.txt』。\r\n" +
-"· Node.js：仅房主开房/单机时需要，不在本包内，自行安装或用便携版。\r\n" +
-(withGame ?
-"· 游戏本体（Stronghold-Protocol 文件夹）：来自开源同人项目 github.com/sganggs/Stronghold-Protocol\r\n" +
-"  （作者 sganggs，代码 GPL-3.0-or-later）。\r\n" +
-"· ★ 游戏素材（美术 / 音乐 / 音效 / 文本 / 游戏数据，即 public\\assets 与 public\\fonts）：\r\n" +
-"  版权归上海鹰角网络 / Yostar 及其授权方所有，不在 GPL 范围内，本项目无权就它们授权给任何人。\r\n"
-:
-"· 本包不含任何游戏本体与游戏素材，游戏跑在房主那边。\r\n") +
+(withNode ? "· Node.js：来自 nodejs.org（MIT），仅房主开房/单机时需要，本包自带便携版。\r\n"
+          : "· Node.js：仅房主开房/单机时需要，不在本包内，自行安装或用便携版。\r\n") +
+"· ★ 本包不含任何游戏本体与游戏素材。游戏本体由使用者自己在启动器里，从原作者\r\n" +
+"  （github.com/sganggs/Stronghold-Protocol，代码 GPL-3.0-or-later）的官方 Release 下载。\r\n" +
+"  游戏素材（美术 / 音乐 / 音效 / 文本 / 游戏数据）版权归上海鹰角网络 / Yostar 及其授权方所有，\r\n" +
+"  不在 GPL 范围内，本项目无权就它们授权给任何人。\r\n" +
 "\r\n" +
 "【使用限制】\r\n" +
 "仅供学习、研究与个人非商业娱乐。禁止任何形式的盈利：出售或付费分发、收费开服、付费房间、\r\n" +
 "植入广告、打赏赞助众筹、打包进收费产品，统统不行。\r\n" +
-(withGame ? "若你要再把这个完整包转给别人，请连本文件一起转，并同样注明「非官方、非商业」。\r\n" : "") +
 "\r\n" +
 "【声明】\r\n" +
 "非官方同人作品，与上海鹰角网络科技有限公司、Yostar 及其关联方没有任何关系，未获其授权或认可。\r\n" +
@@ -3518,7 +3508,7 @@ static class Prog
                "\r\n" +
                "start \"\" \"%EXE%\"\r\n";
     }
-    static string ReadmeTxt(bool withGame)
+    static string ReadmeTxt(bool withNode)
     {
         string s = "";
         s += "卫戍协议：盟约 —— 使用说明\r\n";
@@ -3542,29 +3532,30 @@ static class Prog
         s += "【连不上怎么办】\r\n";
         s += "  1) 房主第一次开房时，Windows 会弹防火墙提示 → 必须勾「专用网络」并点允许\r\n";
         s += "  2) 双方都要先点启动器里的「开始」，等状态显示「● 隧道已连接」\r\n";
-        s += "  3) 还是不行：看 日志 文件夹里的 组网.log，或让房主运行 net\\3-检查组网状态.bat\r\n\r\n";
+        s += "  3) 还是不行：看解压目录里 logs 文件夹的 组网.log（启动器设置页也有「打开日志目录」）\r\n\r\n";
         s += "【重要：不要移动文件】\r\n";
         s += "  不要把 .exe 单独拖到桌面或其他地方——它必须和旁边的 openp2p 文件夹在一起。\r\n";
         s += "  想放桌面，请给 exe 建「快捷方式」，而不是移动它。\r\n\r\n";
-        if (!withGame)
+        if (!withNode)
         {
-            s += "【注意：这是轻量包（更新包）】\r\n";
+            s += "【注意：这是轻量包】\r\n";
             s += "  本包不含游戏本体，只有启动器 + 组网引擎。两种用法：\r\n";
-            s += "  · 已经装过完整包的人：把解压出来的内容覆盖到原目录即可（只换启动器）\r\n";
+            s += "  · 已经装过的人：把解压出来的内容覆盖到原目录即可（只换启动器）\r\n";
             s += "  · 只加入别人房间的人：解压到任意目录双击即可，不需要游戏本体\r\n";
-            s += "  ⚠ 想自己开房 / 玩单机的人，需要「完整包」（含游戏本体），或另外拿到\r\n";
-            s += "     Stronghold-Protocol 文件夹放进启动器同级目录。\r\n\r\n";
+            s += "  ⚠ 想自己开房 / 玩单机的人：到启动器设置页点「下载游戏本体…」自己下\r\n";
+            s += "     （约 290MB，实测十几秒），或者找一份「开房包」（里面带了便携版 Node.js）。\r\n\r\n";
         }
         else
         {
-            s += "【这个完整包能干什么】\r\n";
+            s += "【这个开房包能干什么】\r\n";
             s += "  解压后你就和自己开房的人一样：能单机、能当房主、也能加入别人的房间。\r\n";
             s += "  Node.js 已经放在 卫戍协议启动器\\node\\ 里，开房时启动器会自动用它，不用另外安装。\r\n";
-            s += "  ⚠ 本包含游戏本体与素材，体积是几百 MB 级：群里传输慢、下载慢都正常，建议用网盘或当面拷贝。\r\n\r\n";
+            s += "  ⚠ 本包不含游戏本体（版权原因）：第一次开房 / 单机之前，先到启动器设置页点\r\n";
+            s += "     「下载游戏本体…」，它会从原作者官方地址下载（约 290MB，实测十几秒），下完就能玩。\r\n\r\n";
         }
         s += "【开房的人需要 Node.js】\r\n";
-        s += "  完整包里已经自带便携版 Node（卫戍协议启动器\\node\\node.exe），开房时自动使用。\r\n";
-        s += "  如果你拿到的包没有它，第一次开房时启动器会弹出提示并帮你安装。\r\n";
+        s += withNode ? "  本包已经自带便携版 Node（卫戍协议启动器\\node\\node.exe），开房时自动使用。\r\n"
+                      : "  本包不带 Node：第一次开房时启动器会弹出提示并帮你安装，也可以自己装一个。\r\n";
         s += "  只想加入别人房间的人不需要装任何东西。\r\n\r\n";
         s += "==================================================\r\n";
         s += "非官方同人作品，与鹰角网络 / Yostar 无任何关系。\r\n";
