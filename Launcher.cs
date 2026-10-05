@@ -54,7 +54,7 @@ static class Prog
 {
     const string AppName = "卫戍协议启动器";
     const string GameName = "卫戍协议：盟约";
-    const string Version = "1.2.5";   // ★ 跳号说明：1.2.4 是删库重建前用过的号，跳过它才能保证所有旧版本都能自动更新
+    const string Version = "1.2.6";   // ★ 版本号只往前推（1.2.4 是重建前用过的号，跳过；1.2.5 已发布）
     const string DefaultRoomName = "AAAlappland";
     const string DefaultRoomPass = "909090pq";
     const string PublicPeer = "tcp://public.easytier.cn:11010";
@@ -847,9 +847,10 @@ static class Prog
 
     static string LogDir()
     {
-        string[] r = new string[] { Path.Combine(AppDir, "logs"), Path.Combine(Path.GetDirectoryName(AppDir), "logs") };
-        foreach (string c in r) { try { if (!Directory.Exists(c)) Directory.CreateDirectory(c); return c; } catch { } }
-        return AppDir;
+        // ★ v1.2.6 修：以前这里返回 <启动器目录>\logs（还顺手创建一个空目录），而日志真正写在
+        //   <启动器目录的上一级>\logs（LogDirRoot）—— 于是「打开日志目录」永远开出一个空文件夹，
+        //   2026-10-05 为此白折腾了一轮。现在只认 LogDirRoot() 这一个真相来源。
+        return LogDirRoot();
     }
 
     // ================= 系统工具 =================
@@ -1516,6 +1517,16 @@ static class Prog
             //   同一个 -node 名重复登录还会互相顶掉（"已连接→立刻断开"横跳）。幂等：没有残留就什么都不做。
             int stray = KillAllOpenP2P();
             if (stray > 0) { Log("已清理 " + stray + " 个残留的 openp2p 进程（上一次没收干净）"); Thread.Sleep(500); }
+            // ★ v1.2.6：再清掉上一次会话留在 openp2p 里的"应用配置"。引擎会把历次的 -appname/-peernode
+            //   存进 openp2p\config.json，下次启动就挨个去连 —— 实测它会一直戳早就关机的旧节点
+            //   （那台机器的节点名就留在配置里），每 10 秒吐一句 peer offline，既刷日志又干扰状态判断。
+            //   节点名和令牌我们都是命令行显式传的，这个文件删掉不影响连接（引擎会自己重建）。
+            try
+            {
+                string o2pCfg = Path.Combine(AppDir, "openp2p", "config.json");
+                if (File.Exists(o2pCfg)) { File.Delete(o2pCfg); Log("已清理上一次会话残留的 openp2p 应用配置（免得它一直去连早就关机的旧节点）"); }
+            }
+            catch { }
             List<string> a = new List<string>();
             a.Add("-d");                                  // 守护模式：worker 挂了自动重启
             a.Add("-loglevel"); a.Add("1");
@@ -2170,12 +2181,46 @@ static class Prog
         //   「隧道没连上：令牌无效或已过期」，而隧道 40 秒后其实正常连上了（房主侧日志有
         //   handshakeS2C ok / quic connection ok）。先把这种噪音行挡掉。
         if (low.IndexOf("skip save") >= 0) return;
-        // ★ 隧道断了/重连：openp2p 会自己接回来，但浏览器里的 WebSocket 不会自愈。
-        //   2026-10-04 双机实测：16:15:34 建好 → 16:23:34 `p2ptunnel close`（房主在手机热点上）
-        //   → 16:24:07 自己重连成功；期间状态栏一直写"已连接"，粥友那边只看到游戏里
-        //   "服务器连接已中断"，只能干瞪眼。现在断开就说断开，重连上再说已连接。
-        if (low.IndexOf("p2ptunnel close") >= 0 || low.IndexOf("peer offline") >= 0)
+
+        // ★ v1.2.6 修（2026-10-05 实测踩到）：下面两句**不能无差别当成"我们的隧道断了"**。
+        //   `peer offline` 只是引擎在说"某个 peer 现在不在线" —— 而引擎会把历次会话的 app 存进
+        //   config.json，然后每 10 秒去戳早就关机的旧节点（实测：一直在戳昨天那台已经关机的机器），
+        //   吐的也是 `peer offline`。以前无差别翻成"断开/正在重连"，后果有两个：
+        //   ①状态栏假报警（看着像"连上就断"）②还会误触发看门狗去 taskkill 引擎 ——
+        //   万一那一刻隧道本来是好的，就等于我们亲手把它掐了。
+        //   现在：`p2ptunnel close` = 确实关掉了隧道（认）；`peer offline` / `relay disconnect`
+        //   只有点名**我们这次要连的那台**才算（房主侧不认这两句，房主的"对方走了"由 p2ptunnel close 表达）。
+        if (low.IndexOf("p2ptunnel close") >= 0)
         { TunnelSet(4, "隧道断开（网络抖动/对方掉线），openp2p 正在自动重连"); return; }
+        if (low.IndexOf("peer offline") >= 0 || low.IndexOf("relay disconnect") >= 0)
+        {
+            bool mine = !tunnelHost && joinPeerNode.Length > 0 && low.IndexOf(joinPeerNode.ToLowerInvariant()) >= 0;
+            if (mine) { TunnelSet(4, "隧道断开（网络抖动/对方掉线），openp2p 正在自动重连"); return; }
+            if (noiseSeen.Add(Shorten(ln, 72))) Log("[隧道] 无关节点噪音（不影响本次连接，同类只记一次）：" + Shorten(ln, 130));
+            return;
+        }
+        // ★ v1.2.6：把网络档案（NAT 类型 / 有没有公网 IPv6）抄进我们自己的日志 —— 这是判断
+        //   "为什么连不上"最关键的一行，以前只写在 openp2p\log\ 里，每次都要让人去翻。
+        //   只在**内容变化时**记一次，免得每 37 秒刷一行。
+        if (low.IndexOf("hasipv4") >= 0 || low.IndexOf("nat type") >= 0)
+        {
+            string nd = ln.Trim();
+            if (nd != lastNetDiag)
+            {
+                lastNetDiag = nd;
+                Log("[网络] " + Shorten(nd, 200));
+                int k6 = nd.IndexOf("IPv6:");
+                if (k6 >= 0 && nd.Substring(k6 + 5).Trim().Length == 0)
+                    Log("　· ⚠ 本机没有公网 IPv6 —— 只剩打洞一条路，成功率低一档（对端有 IPv6 时本来可以直连）");
+            }
+            return;
+        }
+        // 中继相关：只看和我们这次对端有关的那几句
+        if (low.IndexOf("relay") >= 0 && !tunnelHost && joinPeerNode.Length > 0 && low.IndexOf(joinPeerNode.ToLowerInvariant()) >= 0)
+        {
+            if (noiseSeen.Add(Shorten(ln, 72))) Log("[隧道] 中继：" + Shorten(ln, 130));
+            return;
+        }
         // ★ 重连成功的标志不止 login ok：重连不会再打一遍 login ok，而是 TCP/QUIC 握手成功那几行
         if (low.IndexOf("login ok") >= 0 || low.IndexOf("sdwan init ok") >= 0 || low.IndexOf("connection ok") >= 0) { TunnelSet(2, null); return; }
         if (low.IndexOf("login fail") >= 0 || low.IndexOf("auth fail") >= 0 || low.IndexOf("login error") >= 0)
@@ -2225,6 +2270,8 @@ static class Prog
     static bool portEverUp;                                // 这次连接里通道是否曾经通过（没通过前不报警：那是隧道刚连上的正常窗口）
     static DateTime dropSince = DateTime.MinValue;          // 进入"断开重连中"的时刻（看门狗用它算等了多久）
     static bool watchdogOffered;                            // 状态栏是否已经变成可点的「重启组网」
+    static readonly HashSet<string> noiseSeen = new HashSet<string>();   // 已经记过痕的"无关节点噪音"行（同类只记一次，免得刷屏）
+    static string lastNetDiag = "";                         // 上一次记进日志的网络档案（NAT/IPv6），内容变了才记
     static bool rejoinPending;                      // 断线了，等重连上再自动重开一次页面
     static DateTime lastReopenAt = DateTime.MinValue;
     static bool tunnelSim;                          // -tunnelsim 自检：只记数，不真开浏览器
@@ -2298,7 +2345,8 @@ static class Prog
                 Thread.Sleep(800);
                 watchdogOffered = false;
                 Ui(delegate { if (statusLine != null) statusLine.Cursor = Cursors.Default; });
-                TunnelBegin(tunnelHost);
+                // ★ v1.2.6：这里不再自己调 TunnelBegin —— StartO2P() 内部已经调了一次（:1546 附近），
+                //   以前两处都调，日志里"握手中"会打两遍。
                 StartO2P(tunnelHost, tunnelHost ? null : joinPeerNode);
                 Log("[看门狗] 组网引擎已重启，等它重新握手（一般 5–20 秒）");
             }

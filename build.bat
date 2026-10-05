@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Build - 卫戍协议启动器 v1.2.5
+title Build - 卫戍协议启动器 v1.2.6
 
 set "FW=C:\Windows\Microsoft.NET\Framework64\v4.0.30319"
 set "CSC=%FW%\csc.exe"
